@@ -80,13 +80,43 @@ class Sandbox:
             "PYTHONDONTWRITEBYTECODE": "1",
             "GIT_CONFIG_NOSYSTEM": "1",
             "GIT_CONFIG_GLOBAL": "/dev/null",
+            "GIT_ATTR_NOSYSTEM": "1",
             "GIT_TERMINAL_PROMPT": "0",
         }
+
+        try:
+            self.copy_git_identity()
+        except BaseException:
+            self.close()
+            raise
 
         result = self.run([str(Path(sys.executable).resolve()), "-I", "-S", "-c", "print('sandbox ready')"])
         if result.returncode != 0 or result.stdout.strip() != "sandbox ready":
             self.close()
             raise ValueError(f"Sandbox startup failed (exit {result.returncode}): {result.stdout.strip()}")
+
+    def copy_git_identity(self):
+        # Commits need the user's name and email. Copy only those values;
+        # loading the real global config would also load hooks and helpers.
+        config = self.scratch / '.gitconfig'
+        for key in ('user.name', 'user.email'):
+            result = subprocess.run(
+                [str(self.git), '--no-pager', 'config', '--global', '--includes', '--get', key],
+                cwd=self.workspace, capture_output=True, text=True,
+            )
+            if result.returncode == 1:
+                continue
+            if result.returncode != 0:
+                raise ValueError(f'Could not read {key} from your global Git configuration.')
+
+            subprocess.run(
+                [str(self.git), '--no-pager', 'config', '--file', str(config), key, result.stdout.removesuffix('\n')],
+                cwd=self.scratch, check=True, capture_output=True,
+            )
+
+        # A temporary global config preserves Git's normal precedence:
+        # workspace-local identity settings override these defaults.
+        self.environment['GIT_CONFIG_GLOBAL'] = str(config)
 
     def close(self):
         self.temporary_directory.cleanup()

@@ -25,6 +25,8 @@ reads ask you to deny, read as untrusted, or trust that read. Untrusted input la
 the conversation and subsequent work, while editing and testing stay available.
 
 Use ordinary `git add` and `git commit` through the sandbox, then ask for `git_push`.
+The sandbox copies your global Git name and email; repository settings can override
+them. Other global Git settings are excluded.
 On the first push, confirm the repository and branch suggested from `origin` and
 the current branch. Choose public or private; private explicitly allows sending
 private project data there. The extension remembers the destination outside the
