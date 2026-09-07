@@ -1,9 +1,22 @@
 export type ConfidentialityScope = 'project' | 'outside';
 
 export type Label = {
-  // Empty means public. Every scope must be authorized at the destination.
+  // Empty means public. Combining data keeps every contributing scope.
   confidentiality: readonly ConfidentialityScope[];
   integrity: 'trusted' | 'untrusted';
+};
+
+export type DestinationPolicy = {
+  allowedScopes: readonly ConfidentialityScope[];
+  requiresTrustedInput: boolean;
+};
+
+export type FlowDecision = {
+  source: Label;
+  destination: DestinationPolicy;
+  missingScopes: readonly ConfidentialityScope[];
+  requiresEndorsement: boolean;
+  requiresApproval: boolean;
 };
 
 export type LabeledValue = {
@@ -16,6 +29,11 @@ export type TextOrReference = string | { ref: string };
 export const PUBLIC_TRUSTED: Label = {
   confidentiality: [],
   integrity: 'trusted',
+};
+
+export const PUBLIC_UNTRUSTED: Label = {
+  confidentiality: [],
+  integrity: 'untrusted',
 };
 
 export const PROJECT_TRUSTED: Label = {
@@ -45,24 +63,33 @@ export function combine(...labels: Label[]): Label {
   };
 }
 
-// These are the permissions a user would need to grant for this particular
-// transfer. The destination lists scopes it may receive. Granting an exception
-// does not change the labels on the original data or later push permissions.
-export function violations(source: Label, destination: Label): string[] {
-  const reasons: string[] = [];
-
+// Report what needs authorization without changing the source label. The
+// caller binds any approval to the exact operation it will execute.
+export function checkFlow(source: Label, destination: DestinationPolicy): FlowDecision {
   const missingScopes = source.confidentiality.filter(scope => {
-    return !destination.confidentiality.includes(scope);
+    return !destination.allowedScopes.includes(scope);
   });
-  if (missingScopes.length) {
-    reasons.push(`release private data from scopes: ${missingScopes.join(', ')}`);
-  }
+  const requiresEndorsement = source.integrity === 'untrusted' && destination.requiresTrustedInput;
 
-  if (source.integrity === 'untrusted' && destination.integrity === 'trusted') {
-    reasons.push('endorse work influenced by untrusted input');
-  }
+  return {
+    source,
+    destination,
+    missingScopes,
+    requiresEndorsement,
+    requiresApproval: missingScopes.length > 0 || requiresEndorsement,
+  };
+}
 
-  return reasons;
+export function destinationText(destination: DestinationPolicy): string {
+  const scopes = destination.allowedScopes.join(', ') || 'public only';
+  const integrity = destination.requiresTrustedInput ? 'trusted input' : 'any integrity';
+  return `allows ${scopes}; ${integrity}`;
+}
+
+export function requireFlow(source: Label, destination: DestinationPolicy, target: string): void {
+  if (checkFlow(source, destination).requiresApproval) {
+    throw new Error(`Blocked by IFC: ${target} cannot receive ${labelText(source)}.`);
+  }
 }
 
 export function labelText(label: Label): string {

@@ -8,7 +8,7 @@ from pathlib import Path
 
 
 class GitPush:
-    """The only worker operation allowed to use the network."""
+    """Push a prepared snapshot through the configured SSH transport."""
 
     def __init__(self, sandbox, state_directory, destination):
         self.sandbox = sandbox

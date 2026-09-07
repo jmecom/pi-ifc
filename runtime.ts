@@ -144,7 +144,7 @@ export function startRuntime(cwd: string, sessionDirectory: string): Runtime {
     const workerDirectory = join(stateDirectory, 'runtime');
     mkdirSync(workerDirectory, { recursive: true, mode: 0o700 });
 
-    for (const filename of ['sandbox.py', 'git_push.py']) {
+    for (const filename of ['sandbox.py', 'git_push.py', 'web_fetch.py']) {
       copyFileSync(join(extensionDirectory, filename), join(workerDirectory, filename));
     }
 

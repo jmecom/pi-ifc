@@ -10,6 +10,10 @@ pi
 
 Requires macOS `sandbox-exec`, Python 3.10+, and Xcode command-line tools.
 
+Start with [policy.ts](policy.ts) for our trust choices, destination permissions,
+and `deliver` functions. [ifc.ts](ifc.ts) combines labels and checks flows;
+[extension.ts](extension.ts) applies those decisions around tool execution.
+
 - **Sandbox:** The current directory is the approved workspace. File and shell
   tools can edit and test locally, but cannot access the network.
 - **Labels:** Confidentiality scopes track sharing permissions: `project` for
@@ -18,20 +22,24 @@ Requires macOS `sandbox-exec`, Python 3.10+, and Xcode command-line tools.
   the conversation; edits and shell calls also label the whole workspace.
   Restrictions persist across sessions and do not stop local coding.
 - **Hidden values:** References keep text out of the main model's context.
-  Reads automatically hide results that would taint a trusted conversation.
+  Reads and web replies hide results that would taint a trusted conversation.
   `quarantined_llm_call` processes hidden text without tools. Its answer stays
   hidden and keeps the labels. `inspect` reveals text and inherits its labels.
-  Once the conversation is untrusted, reads stay visible.
+  Once the conversation is untrusted, results stay visible.
 - **Read approvals:** Outside reads ask you to deny, read as untrusted, or trust
   that read. Trust changes integrity only; the `outside` scope stays.
   `ifc_read_many` groups exact files into one decision for that batch.
-- **Planning:** `ifc_plan` reports live labels and push requirements so the model
+- **Planning:** `ifc_plan` reports labels and push/web requirements so the model
   can anticipate taint and reduce interruptions. A plan grants no permissions.
 - **Controlled pushes:** `git_push` sends a fixed commit and its history to your
   configured SSH remote. Authorize public-only or project data. Other scopes
   require release approval; untrusted influence also requires endorsement.
   We trust the configured server's replies and show them directly. Approval
   does not reset labels.
+- **Web:** `web_fetch` makes one HTTPS GET. Private or untrusted URL influence
+  needs approval for that request, before DNS. Replies stay untrusted and keep
+  the request's scopes. No credentials, redirects, non-public IP addresses, or
+  workspace access; shell stays offline. Text only, up to 1 MiB and 20 seconds.
 - **Bookkeeping:** State and worker copies live outside the editable workspace.
   Tool calls run in order; a lock prevents competing IFC sessions.
 

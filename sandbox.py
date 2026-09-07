@@ -10,6 +10,7 @@ from pathlib import Path
 # -I omits the script directory; only add the protected worker's own directory.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from git_push import GitPush
+from web_fetch import fetch
 
 
 class Cancelled(Exception):
@@ -239,6 +240,9 @@ def dispatch(sandbox, request, pushes=None):
             timeout=min(300, max(1, args.get('timeout', 60))),
         )
         return f'Exit code: {result.returncode}\n{result.stdout}'
+
+    if operation == 'web_fetch':
+        return fetch(args['url'], sandbox.workspace)
 
     if operation == 'baseline':
         try:
