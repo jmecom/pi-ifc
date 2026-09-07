@@ -13,10 +13,12 @@ import { homedir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { readScopes, type ConfidentialityScope } from './ifc.ts';
+
 export type PushDestination = {
   url: string;
   branch: string;
-  private: boolean;
+  allowedScopes: readonly ConfidentialityScope[];
 };
 
 export type Preferences = {
@@ -98,12 +100,13 @@ function readPreferences(filename: string): Preferences {
 
   if (preferences.push) {
     const hasValidFields = typeof preferences.push.url === 'string'
-      && typeof preferences.push.branch === 'string'
-      && typeof preferences.push.private === 'boolean';
+      && typeof preferences.push.branch === 'string';
 
     if (!hasValidFields) {
       throw new Error('Invalid IFC push settings.');
     }
+
+    preferences.push.allowedScopes = readScopes(preferences.push.allowedScopes);
   }
 
   return preferences;

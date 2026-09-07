@@ -1,7 +1,7 @@
 import type { Theme } from '@earendil-works/pi-coding-agent';
 import { Text } from '@earendil-works/pi-tui';
 
-import type { Label } from './ifc.ts';
+import { confidentialityText, type Label } from './ifc.ts';
 
 export type ToolTrace = {
   before: Label;
@@ -20,10 +20,10 @@ export function visible(text: string): string {
 }
 
 function renderLabel(title: string, label: Label, theme: Theme): string {
-  const confidentialityColor = label.confidentiality === 'private' ? 'accent' : 'success';
+  const confidentialityColor = label.confidentiality.length ? 'accent' : 'success';
   const integrityColor = label.integrity === 'untrusted' ? 'warning' : 'success';
 
-  const confidentiality = theme.fg(confidentialityColor, `confidentiality=${label.confidentiality}  `);
+  const confidentiality = theme.fg(confidentialityColor, `confidentiality=${confidentialityText(label)}  `);
   const integrity = theme.fg(integrityColor, `integrity=${label.integrity}`);
 
   return theme.fg('dim', `│ [ifc] ${title}  `)
