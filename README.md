@@ -17,16 +17,18 @@ Requires macOS `sandbox-exec`, Python 3.10+, and Xcode command-line tools.
   edits and shell calls also affect the whole workspace label. Taint persists
   across sessions and does not stop local coding.
 - **Hidden values:** References keep text out of the main model's context.
-  `quarantined_llm_call` processes it without tools and preserves its labels;
-  `inspect` reveals it and inherits those labels. Git replies and helper answers
-  are hidden; ordinary file reads and shell output are visible.
+  Reads automatically hide results that would taint a trusted conversation.
+  `quarantined_llm_call` processes hidden text without tools. Its answer stays
+  hidden and keeps the labels. `inspect` reveals text and inherits its labels.
+  Once the conversation is untrusted, reads stay visible.
 - **Read approvals:** Outside reads ask you to deny, read as untrusted, or trust
   that read. `ifc_read_many` groups exact files into one decision for that batch.
 - **Planning:** `ifc_plan` reports live labels and push requirements so the model
   can anticipate taint and reduce interruptions. A plan grants no permissions.
 - **Controlled pushes:** `git_push` sends a fixed commit and its history to your
   configured SSH remote. Public pushes or untrusted influence require approval.
-  Approval does not reset labels.
+  We trust the configured server's replies and show them directly. Approval
+  does not reset labels.
 - **Bookkeeping:** State and worker copies live outside the editable workspace.
   Tool calls run in order; a lock prevents competing IFC sessions.
 

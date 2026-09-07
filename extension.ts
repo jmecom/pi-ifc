@@ -165,7 +165,7 @@ export default function extension(pi: ExtensionAPI) {
     return variable;
   }
 
-  function hideValue(value: string, label: Label): string {
+  function hideValue(value: string, label: Label): { ref: string } {
     const reference = `v${state.nextId++}`;
     state.variables[reference] = { value, label };
     currentTrace?.push(`stored ${reference}: ${labelText(label)} (hidden)`);
@@ -179,7 +179,7 @@ export default function extension(pi: ExtensionAPI) {
     state.conversation = combine(state.conversation, referenceLabel);
     saveState();
 
-    return JSON.stringify({ ref: reference });
+    return { ref: reference };
   }
 
   function conversationHistory(context: ExtensionContext) {
@@ -515,6 +515,7 @@ export default function extension(pi: ExtensionAPI) {
         ].join('\n');
         trustOption = 'Trust these reads';
       }
+      prompt += '\nUntrusted results stay hidden while the conversation is trusted; inspect reveals them.';
 
       const choice = await context.ui.select(
         prompt,
@@ -539,10 +540,35 @@ export default function extension(pi: ExtensionAPI) {
       }
 
       const fileLabel = target.inside ? state.work : outsideLabel;
-      recordInfluence(combine(pathLabel, fileLabel), context);
+      const label = combine(state.conversation, pathLabel, fileLabel);
       const operation = target.inside ? 'read' : 'outside_read';
-      const content = await callWorker(operation, { ...request, path: target.path });
-      results.push({ path: target.path, content });
+      let text: string;
+      try {
+        text = await callWorker(operation, {
+          path: target.path,
+          offset: request.offset,
+          limit: request.limit,
+        });
+      } catch (error) {
+        // A visible failure can reveal something about the file too.
+        recordInfluence(label, context);
+        throw error;
+      }
+
+      // Hiding more text cannot restore trust once the conversation is tainted.
+      const wouldTaintConversation = label.integrity === 'untrusted'
+        && state.conversation.integrity === 'trusted';
+
+      let content: TextOrReference;
+      if (wouldTaintConversation) {
+        content = hideValue(text, label);
+      } else {
+        recordInfluence(label, context);
+        content = text;
+      }
+
+      // Echo the request, not the resolved path: the path may itself be hidden.
+      results.push({ path: request.path, content });
     }
 
     return results;
@@ -550,17 +576,18 @@ export default function extension(pi: ExtensionAPI) {
 
   registerTool(
     'read',
-    'Read UTF-8 text. Outside files require a user decision. Use ifc_read_many when several reads can be planned together.',
+    'Read UTF-8 text. Results that would taint a trusted conversation return a hidden reference; use inspect to reveal them. Other reads return text. Outside files require a user decision. Use ifc_read_many when several reads can be planned together.',
     READ_PARAMETERS,
     async (input, context, signal) => {
       const results = await readFiles([input], context, signal);
-      return results[0].content;
+      const content = results[0].content;
+      return typeof content === 'string' ? content : JSON.stringify(content);
     },
   );
 
   registerTool(
     'read_many',
-    'Plan and read several UTF-8 files with one approval for all outside reads. Explain what you will use them for. Approval covers this batch only; it grants no shell or directory access.',
+    'Plan and read several UTF-8 files with one approval for all outside reads. Results that would taint a trusted conversation return hidden references. Explain what you will use them for. Approval covers this batch only; it grants no shell or directory access.',
     {
       plan: Type.String({ minLength: 1, maxLength: 500 }),
       files: Type.Array(Type.Object(READ_PARAMETERS, { additionalProperties: false }), { minItems: 1, maxItems: 20 }),
@@ -673,7 +700,8 @@ export default function extension(pi: ExtensionAPI) {
         throw new Error('Helper returned no text.');
       }
 
-      return hideValue(answer, combine(state.conversation, variable.label));
+      const reference = hideValue(answer, combine(state.conversation, variable.label));
+      return JSON.stringify(reference);
     },
   );
 
@@ -774,8 +802,9 @@ export default function extension(pi: ExtensionAPI) {
 
         const result = await callWorker('push', { commit: snapshot.commit, digest: snapshot.digest });
 
-        // A successful push does not make the server's reply trustworthy.
-        const reply = hideValue(result.output, PRIVATE_UNTRUSTED);
+        // We explicitly trust replies from the configured Git server, including
+        // remote hook messages. This does not clear existing conversation taint.
+        currentTrace?.push('Git reply visible: configured server is trusted');
         recordInfluence(label, context);
         pi.appendEntry('ifc-push', {
           commit: snapshot.commit,
@@ -788,10 +817,10 @@ export default function extension(pi: ExtensionAPI) {
         });
 
         if (result.exitCode !== 0) {
-          throw new Error(`Push failed (exit ${result.exitCode}). Server reply: ${reply}`);
+          throw new Error(`Push failed (exit ${result.exitCode}).\nServer reply:\n${result.output}`);
         }
 
-        return `Pushed ${snapshot.commit} to ${destination}.\nServer reply: ${reply}\nLabels unchanged: ${labelText(label)}.`;
+        return `Pushed ${snapshot.commit} to ${destination}.\nServer reply:\n${result.output}\nLabels unchanged: ${labelText(label)}.`;
       } finally {
         await callWorker('discard_push');
       }
@@ -927,7 +956,9 @@ Finish the requested edits and tests before pushing. Where the task permits, col
 Public pushes need permission to release private data. Pushes of untrusted work, or from an untrusted conversation, need endorsement for that push. Labels remain unchanged afterward.
 Uncommitted changes are not pushed. The tool cannot force-push, delete branches, or choose a different destination.
 If IFC requires approval, the user reviews the exact commit snapshot. Do not try to bypass a denial.
-Git server replies are untrusted and returned as hidden references.
+Git replies are visible. This harness trusts the configured Git server, including its hook messages; its replies do not clear existing labels.
+File reads automatically hide results that would make a trusted conversation untrusted. Trusted results are visible. Once the conversation is already untrusted, reads return visible text because hiding it would not restore trust. Outside read approval still applies; there is no flag to choose hiding.
+For example, when an outside log is read as untrusted, ask quarantined_llm_call to extract errors, and inspect only the extracted result if needed. The log and extracted result retain their labels; inspection of either taints the conversation if untrusted.
 Hidden references look like {"ref":"v1"}. Pass them as file-tool arguments to reuse data without seeing it.
 Use quarantined_llm_call when you can process hidden data without reading it yourself. Its tool-free answer stays hidden and inherits the input labels; using untrusted referenced content in edits still taints the work and conversation.
 Use inspect when seeing hidden text is necessary to reason about it or answer the user, accounting for its labels in your plan. The helper cannot make untrusted data trusted.
