@@ -31,6 +31,10 @@ class GitPush:
         }
         if os.environ.get('SSH_AUTH_SOCK'):
             self.environment['SSH_AUTH_SOCK'] = os.environ['SSH_AUTH_SOCK']
+        self.configure(destination)
+
+    def configure(self, destination):
+        self.discard()
         if destination:
             url = destination['url']
             # Keep shell syntax and transport options out of the destination.
@@ -41,6 +45,7 @@ class GitPush:
             branch = destination['branch']
             if branch.startswith('-') or self.run('check-ref-format', f'refs/heads/{branch}').returncode:
                 raise ValueError('Invalid push branch.')
+        self.destination = destination
 
     def run(self, *arguments, repository=None, allow_bundle=False):
         environment = dict(self.environment)
@@ -80,7 +85,7 @@ class GitPush:
 
     def prepare(self, baseline):
         if not self.destination:
-            raise ValueError('Start with --push-url SSH_URL --push-branch BRANCH to enable git_push.')
+            raise ValueError('Choose a push destination with /ifc push first.')
         self.discard()
         try:
             root = self.sandbox.run([str(self.sandbox.git), 'rev-parse', '--show-toplevel'])

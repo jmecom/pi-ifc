@@ -225,6 +225,20 @@ def dispatch(sandbox, request, pushes=None):
     if operation == 'prepare_push':
         return pushes.prepare(args.get('baseline'))
 
+    if operation == 'push_defaults':
+        defaults = {}
+        for name, command in [('url', ('remote', 'get-url', '--push', 'origin')),
+                              ('branch', ('symbolic-ref', '--short', 'HEAD'))]:
+            try:
+                defaults[name] = git(sandbox, *command).strip()
+            except ValueError:
+                defaults[name] = ''
+        return defaults
+
+    if operation == 'configure_push':
+        pushes.configure(args['destination'])
+        return None
+
     if operation == 'push':
         return pushes.push(args['commit'], args['digest'])
 
@@ -241,8 +255,7 @@ def main():
 
     signal.signal(signal.SIGUSR1, interrupt)
     sandbox = Sandbox(Path(sys.argv[1]), [Path(p).resolve() for p in sys.argv[2:]])
-    config = json.loads(os.environ.get('PI_IFC_CONFIG', '{}'))
-    pushes = GitPush(sandbox, Path(sys.argv[2]), config.get('push'))
+    pushes = GitPush(sandbox, Path(sys.argv[2]), None)
     try:
         for line in sys.stdin:
             try:
