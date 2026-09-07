@@ -1,8 +1,8 @@
 import {
   combine,
-  OUTSIDE_TRUSTED,
-  OUTSIDE_UNTRUSTED,
-  PROJECT_TRUSTED,
+  OTHER_PRIVATE_TRUSTED,
+  OTHER_PRIVATE_UNTRUSTED,
+  PROJECT_PRIVATE_TRUSTED,
   PUBLIC_TRUSTED,
   PUBLIC_UNTRUSTED,
   type ConfidentialityScope,
@@ -52,15 +52,15 @@ export function hideIfItWouldTaint(result: LabeledValue, context: DeliveryContex
 }
 
 export const initialConversation = PUBLIC_TRUSTED;
-export const initialWorkspace = PROJECT_TRUSTED;
+export const initialWorkspace = PROJECT_PRIVATE_TRUSTED;
 
-// Unrecognized history, file attachments, and images may contain outside data.
-export const unknownContext = OUTSIDE_UNTRUSTED;
+// Unrecognized history, file attachments, and images may contain other private data.
+export const unknownContext = OTHER_PRIVATE_UNTRUSTED;
 
 export const outsideRead = {
   requiresApproval: true,
-  untrusted: OUTSIDE_UNTRUSTED,
-  trusted: OUTSIDE_TRUSTED,
+  untrusted: OTHER_PRIVATE_UNTRUSTED,
+  trusted: OTHER_PRIVATE_TRUSTED,
 };
 
 export const fileRead = {
@@ -70,7 +70,7 @@ export const fileRead = {
 // Local work remains useful after reading private or untrusted data. The
 // sandbox, rather than an integrity requirement, confines its effects.
 export const localWork: DestinationPolicy = {
-  allowedScopes: ['project', 'outside'],
+  allowedScopes: ['project_private', 'other_private'],
   requiresTrustedInput: false,
 };
 
@@ -94,7 +94,7 @@ export const inspection = {
 
 // Sending any scope to the selected model provider is an explicit assumption.
 export const model: DestinationPolicy = {
-  allowedScopes: ['project', 'outside'],
+  allowedScopes: ['project_private', 'other_private'],
   requiresTrustedInput: false,
 };
 
@@ -114,6 +114,24 @@ export const web = {
   replies: PUBLIC_UNTRUSTED,
   deliver: hideIfItWouldTaint,
 } satisfies ToolPolicy;
+
+export const research = {
+  requests: web.requests,
+  // The user authorizes public use of the exact brief for this research job.
+  // The researcher may follow untrusted web leads, but cannot read private data.
+  browsing: {
+    allowedScopes: [],
+    requiresTrustedInput: false,
+  } satisfies DestinationPolicy,
+  replies: PUBLIC_UNTRUSTED,
+  deliver: expose,
+};
+
+// Call only after the user reviews and endorses this exact text. This changes
+// the artifact's integrity; it does not clear history or release private data.
+export function endorse(result: LabeledValue): LabeledValue {
+  return { ...result, label: { ...result.label, integrity: 'trusted' } };
+}
 
 export const gitPush = {
   requests(allowedScopes: readonly ConfidentialityScope[]): DestinationPolicy {

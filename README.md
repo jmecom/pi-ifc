@@ -16,10 +16,10 @@ and `deliver` functions. [ifc.ts](ifc.ts) combines labels and checks flows;
 
 - **Sandbox:** The current directory is the approved workspace. File and shell
   tools can edit and test locally, but cannot access the network.
-- **Labels:** Confidentiality scopes track sharing permissions: `project` for
-  workspace data, `outside` for other private inputs, and none for public data.
-  Combining data keeps both scopes. Integrity is trusted/untrusted. Reads label
-  the conversation; edits and shell calls also label the whole workspace.
+- **Labels:** Confidentiality scopes track sharing permissions: `project_private`
+  for workspace data, `other_private` for other private inputs, and none for
+  public data. Combining data keeps both scopes. Integrity is trusted/untrusted.
+  Reads label the conversation; edits and shell calls also label the whole workspace.
   Restrictions persist across sessions and do not stop local coding.
 - **Hidden values:** References keep text out of the main model's context.
   Reads and web replies hide results that would taint a trusted conversation.
@@ -27,13 +27,18 @@ and `deliver` functions. [ifc.ts](ifc.ts) combines labels and checks flows;
   hidden and keeps the labels. `inspect` reveals text and inherits its labels.
   Once the conversation is untrusted, results stay visible.
 - **Read approvals:** Outside reads ask you to deny, read as untrusted, or trust
-  that read. Trust changes integrity only; the `outside` scope stays.
+  that read. Trust changes integrity only; the `other_private` scope stays.
   `ifc_read_many` groups exact files into one decision for that batch.
 - **Planning:** `ifc_plan` reports labels and push/web requirements so the model
   can anticipate taint and reduce interruptions. A plan grants no permissions.
+- **Research:** `research` has its own model history and only public web fetches
+  (up to 8). You review its brief for public use, then edit and endorse its plan
+  before the coding model sees it. Rejected plans stay out of the conversation.
+  Endorsement preserves private scopes and earlier taint; sandbox and destination
+  checks still apply. Human review can miss malicious recommendations.
 - **Controlled pushes:** `git_push` sends a fixed commit and its history to your
-  configured SSH remote. Authorize public-only or project data. Other scopes
-  require release approval; untrusted influence also requires endorsement.
+  configured SSH remote. Authorize public-only or `project_private` data. Other
+  scopes require release approval; untrusted influence also requires endorsement.
   We trust the configured server's replies and show them directly. Approval
   does not reset labels.
 - **Web:** `web_fetch` makes one HTTPS GET. Private or untrusted URL influence

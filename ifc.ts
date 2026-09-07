@@ -1,4 +1,4 @@
-export type ConfidentialityScope = 'project' | 'outside';
+export type ConfidentialityScope = 'project_private' | 'other_private';
 
 export type Label = {
   // Empty means public. Combining data keeps every contributing scope.
@@ -36,23 +36,23 @@ export const PUBLIC_UNTRUSTED: Label = {
   integrity: 'untrusted',
 };
 
-export const PROJECT_TRUSTED: Label = {
-  confidentiality: ['project'],
+export const PROJECT_PRIVATE_TRUSTED: Label = {
+  confidentiality: ['project_private'],
   integrity: 'trusted',
 };
 
-export const OUTSIDE_TRUSTED: Label = {
-  confidentiality: ['outside'],
+export const OTHER_PRIVATE_TRUSTED: Label = {
+  confidentiality: ['other_private'],
   integrity: 'trusted',
 };
 
-export const OUTSIDE_UNTRUSTED: Label = {
-  confidentiality: ['outside'],
+export const OTHER_PRIVATE_UNTRUSTED: Label = {
+  confidentiality: ['other_private'],
   integrity: 'untrusted',
 };
 
 // Combining data keeps every confidentiality restriction and any untrusted
-// influence. Copying outside text into the project cannot make it project-only.
+// influence. Copying other private data into the project keeps both scopes.
 export function combine(...labels: Label[]): Label {
   const scopes = new Set(labels.flatMap(label => label.confidentiality));
   const hasUntrustedInput = labels.some(label => label.integrity === 'untrusted');
@@ -98,13 +98,13 @@ export function labelText(label: Label): string {
 
 export function confidentialityText(label: Label): string {
   return label.confidentiality.length
-    ? `private[${label.confidentiality.join(', ')}]`
+    ? `[${label.confidentiality.join(', ')}]`
     : 'public';
 }
 
 export function readScopes(value: unknown): ConfidentialityScope[] {
-  if (!Array.isArray(value) || !value.every(scope => scope === 'project' || scope === 'outside')) {
-    throw new Error('Invalid confidentiality scopes.');
+  if (!Array.isArray(value) || !value.every(scope => scope === 'project_private' || scope === 'other_private')) {
+    throw new Error('Invalid confidentiality scopes. Expected project_private or other_private.');
   }
 
   return [...new Set<ConfidentialityScope>(value)].sort();
