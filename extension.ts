@@ -69,10 +69,22 @@ type BashArguments = {
   timeout?: number;
 };
 
+type FileRead = {
+  path: TextOrReference;
+  offset?: number;
+  limit?: number;
+};
+
 const TEXT_OR_REFERENCE = Type.Union([
   Type.String(),
   Type.Object({ ref: Type.String() }, { additionalProperties: false }),
 ]);
+
+const READ_PARAMETERS = {
+  path: TEXT_OR_REFERENCE,
+  offset: Type.Optional(Type.Integer({ minimum: 1 })),
+  limit: Type.Optional(Type.Integer({ minimum: 1 })),
+};
 
 export default function extension(pi: ExtensionAPI) {
   let runtime: Runtime;
@@ -96,6 +108,21 @@ export default function extension(pi: ExtensionAPI) {
   function updateStatus(context: ExtensionContext) {
     const text = `IFC ${labelText(state.conversation)} · workspace ${labelText(state.work)}`;
     context.ui.setStatus('ifc', context.ui.theme.fg('dim', text));
+  }
+
+  function pushPolicy() {
+    if (!runtime.push) {
+      return undefined;
+    }
+
+    const label = combine(state.conversation, state.work);
+    const clearance = runtime.push.private ? PRIVATE_TRUSTED : PUBLIC_TRUSTED;
+    return {
+      destination: `${runtime.push.url} → refs/heads/${runtime.push.branch}`,
+      label,
+      clearance,
+      reasons: violations(label, clearance),
+    };
   }
 
   function recordInfluence(
@@ -307,10 +334,24 @@ export default function extension(pi: ExtensionAPI) {
   function referencedLabels(name: string, input: Record<string, unknown>): Label[] {
     const labels: Label[] = [];
 
-    for (const value of Object.values(input)) {
-      if (value && typeof value === 'object' && 'ref' in value && typeof value.ref === 'string') {
-        labels.push(getVariable(value.ref).label);
+    function collect(value: unknown) {
+      if (!value || typeof value !== 'object') {
+        return;
       }
+
+      if ('ref' in value && typeof value.ref === 'string') {
+        labels.push(getVariable(value.ref).label);
+        return;
+      }
+
+      // Batch reads can contain references inside their file list.
+      for (const nested of Object.values(value)) {
+        collect(nested);
+      }
+    }
+
+    for (const value of Object.values(input)) {
+      collect(value);
     }
 
     if (name === 'inspect' || name === 'quarantined_llm_call') {
@@ -332,7 +373,7 @@ export default function extension(pi: ExtensionAPI) {
   ) {
     // Separate names keep another extension's built-in tool overrides from
     // replacing the sandboxed file and shell operations.
-    const isFileOrShellTool = ['read', 'write', 'edit', 'bash'].includes(name);
+    const isFileOrShellTool = ['read', 'read_many', 'write', 'edit', 'bash'].includes(name);
     const registeredName = isFileOrShellTool ? `ifc_${name}` : name;
     toolNames.push(registeredName);
 
@@ -415,37 +456,118 @@ export default function extension(pi: ExtensionAPI) {
   }
 
   registerTool(
-    'read',
-    'Read UTF-8 text. Outside files require a user decision. Paths may be references.',
-    {
-      path: TEXT_OR_REFERENCE,
-      offset: Type.Optional(Type.Integer({ minimum: 1 })),
-      limit: Type.Optional(Type.Integer({ minimum: 1 })),
-    },
-    async (input, context) => {
-      const path = resolveText(input.path);
-      const target = await callWorker('resolve', { path: path.value });
-      let fileLabel = state.work;
-
-      if (!target.inside) {
-        if (!context.hasUI) {
-          throw new Error('Outside read requires interactive approval.');
-        }
-
-        const choice = await context.ui.select(
-          `Read ${visible(JSON.stringify(target.path))}?`,
-          ['Deny', 'Read as untrusted', 'Trust this read'],
-        );
-        if (!choice || choice === 'Deny') {
-          throw new Error('Outside read denied.');
-        }
-
-        fileLabel = choice === 'Trust this read' ? PRIVATE_TRUSTED : PRIVATE_UNTRUSTED;
+    'ifc_plan',
+    'Record a short action plan: steps, information needed, expected label changes, and permission requests that can be grouped. Returns current labels and push policy. Executes no actions and grants no permissions.',
+    { plan: Type.String({ minLength: 1, maxLength: 2000 }) },
+    async () => {
+      // Pi records the proposal in the tool call. Its text is never authority
+      // to execute a step, clear a label, or skip an approval.
+      const references: Record<string, Label> = {};
+      for (const [reference, variable] of Object.entries(state.variables)) {
+        references[reference] = variable.label;
       }
 
-      recordInfluence(combine(path.label, fileLabel), context);
+      return JSON.stringify({
+        conversation: state.conversation,
+        workspace: state.work,
+        references,
+        push: pushPolicy() ?? { setupRequired: true },
+        note: 'Plan recorded. No actions executed or permissions granted. Labels and push requirements can change as tools run.',
+      }, null, 2);
+    },
+  );
+
+  async function readFiles(
+    requests: FileRead[],
+    context: ExtensionContext,
+    signal?: AbortSignal,
+    plan?: string,
+  ) {
+    const reads = [];
+    for (const request of requests) {
+      if (signal?.aborted) {
+        throw new Error('Cancelled.');
+      }
+
+      const path = resolveText(request.path);
+      const target = await callWorker('resolve', { path: path.value });
+      reads.push({ request, target, pathLabel: path.label });
+    }
+
+    const outsideReads = reads.filter(read => !read.target.inside);
+    let outsideLabel = PRIVATE_UNTRUSTED;
+
+    if (outsideReads.length) {
+      if (!context.hasUI) {
+        throw new Error('Outside read requires interactive approval.');
+      }
+
+      let prompt = `Read ${visible(JSON.stringify(outsideReads[0].target.path))}?`;
+      let trustOption = 'Trust this read';
+      if (plan !== undefined) {
+        const paths = outsideReads.map(read => visible(JSON.stringify(read.target.path)));
+        prompt = [
+          `Read these ${outsideReads.length} outside files?`,
+          ...paths,
+          '',
+          `Agent's plan: ${visible(JSON.stringify(plan))}`,
+          'Approval applies only to this batch.',
+        ].join('\n');
+        trustOption = 'Trust these reads';
+      }
+
+      const choice = await context.ui.select(
+        prompt,
+        ['Deny', 'Read as untrusted', trustOption],
+        { signal },
+      );
+      if (!choice || choice === 'Deny') {
+        throw new Error('Outside read denied.');
+      }
+
+      outsideLabel = choice === trustOption ? PRIVATE_TRUSTED : PRIVATE_UNTRUSTED;
+      currentTrace?.push(`approved ${outsideReads.length} outside reads: ${labelText(outsideLabel)}`);
+    }
+
+    // Resolve the entire list and ask before reading any contents. Each read
+    // still gets its own exact-file sandbox permission; nothing is remembered
+    // as a grant for later calls, shell commands, or the enclosing directory.
+    const results = [];
+    for (const { request, target, pathLabel } of reads) {
+      if (signal?.aborted) {
+        throw new Error('Cancelled.');
+      }
+
+      const fileLabel = target.inside ? state.work : outsideLabel;
+      recordInfluence(combine(pathLabel, fileLabel), context);
       const operation = target.inside ? 'read' : 'outside_read';
-      return callWorker(operation, { ...input, path: target.path });
+      const content = await callWorker(operation, { ...request, path: target.path });
+      results.push({ path: target.path, content });
+    }
+
+    return results;
+  }
+
+  registerTool(
+    'read',
+    'Read UTF-8 text. Outside files require a user decision. Use ifc_read_many when several reads can be planned together.',
+    READ_PARAMETERS,
+    async (input, context, signal) => {
+      const results = await readFiles([input], context, signal);
+      return results[0].content;
+    },
+  );
+
+  registerTool(
+    'read_many',
+    'Plan and read several UTF-8 files with one approval for all outside reads. Explain what you will use them for. Approval covers this batch only; it grants no shell or directory access.',
+    {
+      plan: Type.String({ minLength: 1, maxLength: 500 }),
+      files: Type.Array(Type.Object(READ_PARAMETERS, { additionalProperties: false }), { minItems: 1, maxItems: 20 }),
+    },
+    async (input, context, signal) => {
+      const results = await readFiles(input.files, context, signal, input.plan);
+      return JSON.stringify(results);
     },
   );
 
@@ -603,14 +725,12 @@ export default function extension(pi: ExtensionAPI) {
       if (!runtime.push) {
         await configurePush(context, signal);
       }
-      if (!runtime.push) {
+      const policy = pushPolicy();
+      if (!policy) {
         throw new Error('No push destination.');
       }
 
-      const label = combine(state.conversation, state.work);
-      const destination = `${runtime.push.url} → refs/heads/${runtime.push.branch}`;
-      const clearance = runtime.push.private ? PRIVATE_TRUSTED : PUBLIC_TRUSTED;
-      const reasons = violations(label, clearance);
+      const { label, destination, clearance, reasons } = policy;
       const decision = reasons.length ? 'approval required' : 'allowed';
       currentTrace?.push(`push ${labelText(label)} → ${labelText(clearance)}: ${decision}`);
 
@@ -787,16 +907,30 @@ export default function extension(pi: ExtensionAPI) {
     // enforce the rules themselves.
     return {
       systemPrompt: `${event.systemPrompt}\n\nYour IFC workspace is ${JSON.stringify(runtime.workspace)}.
-Use ifc_read, ifc_write, ifc_edit, and ifc_bash. These tools run inside a macOS sandbox with no network.
+Current conversation label: ${labelText(state.conversation)}. Workspace label: ${labelText(state.work)}.
+Complete the user's task while respecting IFC and minimizing unnecessary interruptions. Do not skip needed reading, edits, or tests just to avoid taint.
+Use ifc_plan for a multi-step task and update it when new information changes the approach, needed permissions, or choice to inspect hidden data. Keep it a short action plan, not a transcript of your reasoning.
+Plan across all tools: identify the information you need to see, the effects of those observations on labels, the local actions you can still take, and any eventual external action that will need approval.
+Consult tool descriptions and the live labels returned by ifc_plan. It reports push requirements using the same policy as git_push; those requirements may change after further work.
+Group known independent operations when an available tool supports batching. Describe expected permission needs together in the plan; the tool's approval UI obtains the actual authorization, so do not ask for an additional prose approval.
+When information or arguments depend on an earlier result, wait for that result and then revise the plan. A plan is a proposal, never a permission grant, and it cannot authorize new paths, shell access, or a future push snapshot.
+Use ifc_read, ifc_read_many, ifc_write, ifc_edit, and ifc_bash. These tools run inside a macOS sandbox with no network.
 Workspace and scratch are writable; approved runtimes are read-only. Outside read requires user approval.
-Untrusted text may influence local edits and tests. Labels follow the conversation and the whole workspace.
-An untrusted conversation does not prevent local work. It affects push permissions.
+For example, use ifc_read_many for known independent reads. Include the exact files, useful line ranges, and a short plan describing the actions their contents will support.
+The user makes one labeling decision for all outside files in that batch. Approval does not carry over to future batches or shell commands.
+Do not repeat a denied request without new user direction.
+Private data stays private when combined with public data. Untrusted influence cannot be removed by later trusted inputs, a new plan, or a session restart.
+Reading exposed untrusted text taints the conversation. Edits and shell commands carry the conversation's influence into the workspace; every shell call counts as a possible write.
+Untrusted local edits and tests are allowed. Do not ask the user to endorse data just to keep doing local work. Trusting a read labels that input as trusted; it does not clear existing taint.
 Use ifc_bash for git add and git commit. git_push sends committed HEAD and its history to a destination the user confirms in Pi on the first push.
+Finish the requested edits and tests before pushing. Where the task permits, collect the work into one final push rather than requesting approval for each intermediate change.
+Public pushes need permission to release private data. Pushes of untrusted work, or from an untrusted conversation, need endorsement for that push. Labels remain unchanged afterward.
 Uncommitted changes are not pushed. The tool cannot force-push, delete branches, or choose a different destination.
 If IFC requires approval, the user reviews the exact commit snapshot. Do not try to bypass a denial.
 Git server replies are untrusted and returned as hidden references.
 Hidden references look like {"ref":"v1"}. Pass them as file-tool arguments to reuse data without seeing it.
-inspect reveals a reference and inherits its labels. quarantined_llm_call processes it with a separate tool-free call and returns another reference.
+Use quarantined_llm_call when you can process hidden data without reading it yourself. Its tool-free answer stays hidden and inherits the input labels; using untrusted referenced content in edits still taints the work and conversation.
+Use inspect when seeing hidden text is necessary to reason about it or answer the user, accounting for its labels in your plan. The helper cannot make untrusted data trusted.
 The approved model provider may receive private data. Never claim to have seen a hidden value merely because you have its reference.`,
     };
   });
